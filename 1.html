@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Magic Christmas - Chaos Bloom</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Segoe UI', sans-serif; }
+        #canvas-container { width: 100%; height: 100vh; display: block; }
+        
+        #wish-overlay {
+            position: fixed; top: 10%; left: 50%; transform: translate(-50%, -50%);
+            width: 90%; text-align: center; color: #FFF176; font-size: 32px; font-weight: bold; 
+            opacity: 0; transition: opacity 0.8s; z-index: 200; pointer-events: none;
+            text-shadow: 0 0 20px rgba(255, 0, 0, 1); line-height: 1.6;
+        }
+
+        #ui-layer { position: absolute; bottom: 30px; width: 100%; text-align: center; pointer-events: none; z-index: 100; }
+        .badge {
+            display: inline-block; background: rgba(0, 0, 0, 0.7); border: 2px solid #FFD700;
+            color: #FFD700; padding: 12px 30px; border-radius: 50px; font-size: 20px;
+            font-weight: bold; margin-bottom: 10px; box-shadow: 0 0 20px rgba(255, 215, 0, 0.5);
+        }
+        .guide { color: #eee; font-size: 14px; margin-bottom: 20px; text-shadow: 0 2px 4px black; }
+        
+        button {
+            pointer-events: auto; cursor: pointer; background: #D32F2F; color: #FFF; 
+            border: 2px solid #FFD700; padding: 15px 60px; border-radius: 50px;
+            font-weight: bold; font-size: 18px; box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+        }
+
+        #camera-preview {
+            position: fixed; top: 15px; right: 15px; width: 120px; height: 90px;
+            border-radius: 12px; border: 2px solid #FFD700; transform: scaleX(-1);
+            z-index: 300; background: #000; object-fit: cover;
+        }
+    </style>
+</head>
+
+<body>
+    <canvas id="camera-preview"></canvas>
+    <div id="ui-layer">
+        <div id="wish-overlay"></div>
+        <div id="status" class="badge">🎄 Merry Christmas 🎄</div>
+        <div class="guide">
+            ✊ <b>Hold your hand:</b> Merry Christmas | ☝️ <b>1-4 finger:</b> Photo | 🖐️ <b>Spread your hands:</b> Boom | ❤️ <b>Heart shape hands:</b> My wish
+        </div>
+        <button id="btnStart" onclick="startSystem()">Let's Start</button>
+    </div>
+
+    <div id="canvas-container"></div>
+    <video class="input_video" style="display:none" playsinline></video>
+
+    <script>
+        let scene, camera, renderer, groupGold, groupRed, groupGift, loveTextMesh;
+        let photoMeshes = [], state = 'TREE', selectedIndex = 0;
+        let autoRotateY = 0;
+
+        const loader = new THREE.TextureLoader();
+        const photoFiles = ['./img/a1.jpg', './img/a2.jpg', './img/a3.jpg', './img/a4.jpg'];
+        const photoTextures = photoFiles.map(f => loader.load(f));
+
+        function createCustomTexture(type) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 128; canvas.height = 128;
+            const ctx = canvas.getContext('2d');
+            const grd = ctx.createRadialGradient(64, 64, 0, 64, 64, 60);
+            if (type === 'gold') {
+                grd.addColorStop(0, '#FFFFFF'); grd.addColorStop(0.4, '#FFD700'); grd.addColorStop(1, 'rgba(0,0,0,0)');
+            } else if (type === 'white') {
+                grd.addColorStop(0, '#FFFFFF'); grd.addColorStop(0.4, '#E0F7FA'); grd.addColorStop(1, 'rgba(0,0,0,0)');
+            } else {
+                grd.addColorStop(0, '#FFFFFF'); grd.addColorStop(0.4, '#FF3366'); grd.addColorStop(1, 'rgba(0,0,0,0)');
+            }
+            ctx.fillStyle = grd; ctx.fillRect(0, 0, 128, 128);
+            return new THREE.CanvasTexture(canvas);
+        }
+
+        const textures = { gold: createCustomTexture('gold'), red: createCustomTexture('red'), white: createCustomTexture('white') };
+
+        function init3D() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 120;
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            groupGold = createParticleSystem('gold', 2500, 2.0);
+            groupRed = createParticleSystem('red', 600, 3.5);
+            groupGift = createParticleSystem('gold', 300, 4.5);
+
+            const snowGeo = new THREE.BufferGeometry();
+            const snowPos = [];
+            for(let i=0; i<1500; i++) {
+                snowPos.push(Math.random()*400-200, Math.random()*400-200, Math.random()*400-200);
+            }
+            snowGeo.setAttribute('position', new THREE.Float32BufferAttribute(snowPos, 3));
+            const snowMat = new THREE.PointsMaterial({ size: 1.5, map: textures.white, transparent: true, opacity: 0.8, depthWrite: false });
+            snowSystem = new THREE.Points(snowGeo, snowMat);
+            scene.add(snowSystem);
+
+            const canvasL = document.createElement('canvas');
+            canvasL.width = 1024; canvasL.height = 256;
+            const ctxL = canvasL.getContext('2d');
+            ctxL.font = 'bold 100px Arial'; ctxL.textAlign = 'center'; ctxL.fillStyle = '#FFFFFF';
+            ctxL.fillText('MERRY CHRISTMAS', 512, 140);
+            const textTex = new THREE.CanvasTexture(canvasL);
+            loveTextMesh = new THREE.Mesh(
+                new THREE.PlaneGeometry(90, 22), 
+                new THREE.MeshBasicMaterial({ map: textTex, transparent: true })
+            );
+            loveTextMesh.visible = false; 
+            scene.add(loveTextMesh);
+
+            // Ảnh kỷ niệm
+            const photoGeo = new THREE.PlaneGeometry(55, 55);
+            photoTextures.forEach(tex => {
+                const m = new THREE.Mesh(photoGeo, new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide }));
+                m.visible = false; scene.add(m); photoMeshes.push(m);
+            });
+
+            animate();
+        }
+
+        function createParticleSystem(type, count, size) {
+            const pTree = [], pHeart = [], pExplode = [], pPos = [];
+            for (let i = 0; i < count; i++) {
+                // Cây thông
+                const h = Math.random() * 100;
+                const r = (1 - h/100) * 50 * Math.sqrt(Math.random());
+                const theta = Math.random() * Math.PI * 2;
+                pTree.push(r * Math.cos(theta), h - 50, r * Math.sin(theta));
+
+                // Trái tim
+                const t = Math.random() * Math.PI * 2;
+                pHeart.push(16*Math.pow(Math.sin(t),3)*3, (13*Math.cos(t)-5*Math.cos(2*t)-2*Math.cos(3*t)-Math.cos(4*t))*3, (Math.random()-0.5)*15);
+
+                // Bung tỏa (Chaos) - Tọa độ ngẫu nhiên xa trung tâm
+                const rad = 150 + Math.random() * 100;
+                const phi = Math.random() * Math.PI * 2;
+                const costheta = Math.random() * 2 - 1;
+                const theta_exp = Math.acos(costheta);
+                pExplode.push(rad * Math.sin(theta_exp) * Math.cos(phi), rad * Math.sin(theta_exp) * Math.sin(phi), rad * Math.cos(theta_exp));
+                
+                pPos.push(pTree[i*3], pTree[i*3+1], pTree[i*3+2]);
+            }
+            const geo = new THREE.BufferGeometry();
+            geo.setAttribute('position', new THREE.Float32BufferAttribute(pPos, 3));
+            geo.userData = { tree: pTree, heart: pHeart, explode: pExplode };
+            const mat = new THREE.PointsMaterial({ size, map: textures[type], transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+            const p = new THREE.Points(geo, mat);
+            scene.add(p); return p;
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            autoRotateY += 0.02;
+
+            const sPos = snowSystem.geometry.attributes.position.array;
+            for(let i=1; i<sPos.length; i+=3) {
+                sPos[i] -= 0.6; // tốc độ rơi
+                if(sPos[i] < -150) sPos[i] = 150; 
+            }
+            snowSystem.geometry.attributes.position.needsUpdate = true;
+
+            [groupGold, groupRed, groupGift].forEach(g => {
+                const pos = g.geometry.attributes.position.array;
+                const userData = g.geometry.userData;
+                let targetArr = state === 'HEART' ? userData.heart : (state === 'EXPLODE' ? userData.explode : userData.tree);
+                
+                for (let i = 0; i < pos.length; i += 3) {
+                    const speed = (state === 'EXPLODE') ? 0.03 : 0.08;
+                    pos[i] += (targetArr[i] - pos[i]) * speed;
+                    pos[i+1] += (targetArr[i+1] - pos[i+1]) * speed;
+                    pos[i+2] += (targetArr[i+2] - pos[i+2]) * speed;
+
+                    if (state === 'EXPLODE') {
+                        // Thêm nhiễu loạn cho hiệu ứng "bay tứ tung"
+                        pos[i] += (Math.random() - 0.5) * 4;
+                        pos[i+1] += (Math.random() - 0.5) * 4;
+                        pos[i+2] += (Math.random() - 0.5) * 4;
+                    }
+                }
+                g.geometry.attributes.position.needsUpdate = true;
+                
+                if (state === 'TREE') g.rotation.y = autoRotateY;
+                else if (state === 'HEART') g.rotation.y += (0 - g.rotation.y) * 0.05;
+                
+                // Tăng độ sáng rực khi bung tỏa
+                g.material.size = (state === 'EXPLODE') ? 5.0 : (g === groupGold ? 1.8 : 3.5);
+            });
+
+            // Hiển thị chữ Merry Christmas khi đan tay trái tim
+            if (state === 'HEART') {
+                loveTextMesh.visible = true;
+                loveTextMesh.lookAt(camera.position);
+                
+                // Thay đổi màu liên tục: Đỏ -> Vàng -> Xanh
+                const colors = [0xFF0000, 0xFFD700, 0x00FF00];
+                const colorIdx = Math.floor(Date.now() / 300) % colors.length;
+                loveTextMesh.material.color.setHex(colors[colorIdx]);
+            } else {
+                loveTextMesh.visible = false;
+            }
+
+            // Chỉ hiển thị ảnh khi giơ từ 1-4 ngón
+            photoMeshes.forEach((m, i) => {
+                if (state === 'PHOTO' && i === selectedIndex) {
+                    m.visible = true; m.position.lerp(new THREE.Vector3(0, 0, 60), 0.1);
+                    m.lookAt(camera.position);
+                } else {
+                    m.visible = false; m.position.set(0,0,0);
+                }
+            });
+
+            renderer.render(scene, camera);
+        }
+
+        function startSystem() {
+            document.getElementById('btnStart').style.display = 'none';
+            init3D();
+            
+            const video = document.querySelector('.input_video');
+            const canvasPrev = document.getElementById('camera-preview');
+            const ctxPrev = canvasPrev.getContext('2d');
+
+            const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
+            hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
+
+            hands.onResults(results => {
+                ctxPrev.clearRect(0, 0, canvasPrev.width, canvasPrev.height);
+                ctxPrev.drawImage(results.image, 0, 0, canvasPrev.width, canvasPrev.height);
+
+                const wish = document.getElementById('wish-overlay');
+                const status = document.getElementById('status');
+
+                if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                    // 1. Nhận diện 2 tay đan Trái Tim
+                    if (results.multiHandLandmarks.length === 2) {
+                        const h1 = results.multiHandLandmarks[0];
+                        const h2 = results.multiHandLandmarks[1];
+                        const distIndex = Math.hypot(h1[8].x - h2[8].x, h1[8].y - h2[8].y);
+                        const distThumb = Math.hypot(h1[4].x - h2[4].x, h1[4].y - h2[4].y);
+
+                        if (distIndex < 0.12 && distThumb < 0.12) {
+                            state = 'HEART';
+                            wish.style.opacity = 1;
+                            wish.innerText = "Chúc Minh Hiền một mùa Giáng sinh an lành,ấm áp, hạnh phúc bên những người yêu quý!";
+                            status.innerText = "MY WISH";
+                            return;
+                        }
+                    }
+
+                    // 2. Nhận diện 1 tay (Ảnh/Bung tỏa/Cây thông)
+                    const lm = results.multiHandLandmarks[0];
+                    let up = 0;
+                    if (lm[8].y < lm[6].y) up++; 
+                    if (lm[12].y < lm[10].y) up++;
+                    if (lm[16].y < lm[14].y) up++;
+                    if (lm[20].y < lm[18].y) up++;
+                    
+                    const thumbDist = Math.hypot(lm[4].x - lm[17].x, lm[4].y - lm[17].y);
+                    if (thumbDist > 0.2) up++;
+
+                    if (up >= 1 && up <= 4) {
+                        state = 'PHOTO'; selectedIndex = up - 1; wish.style.opacity = 0;
+                        status.innerText = "📸 PHOTO " + up;
+                    } else if (up === 5) {
+                        state = 'EXPLODE'; wish.style.opacity = 0;
+                        status.innerText = "🖐️ BOOM";
+                    } else {
+                        state = 'TREE'; wish.style.opacity = 0;
+                        status.innerText = "🎄 MERRY CHRISTMAS";
+                    }
+                } else {
+                    state = 'TREE'; wish.style.opacity = 0;
+                }
+            });
+
+            const cameraUtils = new Camera(video, {
+                onFrame: async () => { await hands.send({ image: video }); },
+                width: 640, height: 480
+            });
+            cameraUtils.start();
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
